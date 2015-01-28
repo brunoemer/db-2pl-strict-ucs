@@ -1,0 +1,237 @@
+<html>
+<head>
+<title>Aspectos de Implementação de Banco de Dados - Controle de concorrência utilizando protocolo 2PL Strict</title> 
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8">
+
+<link href="jquery-ui-1.10.4.custom/css/cupertino/jquery-ui-1.10.4.custom.css" rel="stylesheet">
+<script src="jquery-ui-1.10.4.custom/js/jquery-1.10.2.js"></script>
+<script src="jquery-ui-1.10.4.custom/js/jquery-ui-1.10.4.custom.js"></script>
+
+<style type="text/css">
+
+</style>
+<script type="text/javascript">
+var hist;
+var end_hist;
+var field_delay;
+$(document).ready(function() {
+	hist = new History();
+	end_hist = $('#end_hist');
+	field_delay = $('#delay');
+	
+	$('#bnext').click(function(){
+		hist.next();
+	});
+	$('#bfinish').click(function(){
+		hist.finishAll();
+	});
+	$('#delay').prop('readonly', true);
+	$('#end_hist').prop('readonly', true);
+});
+
+function History(){
+	this.operations = [];
+	this.data = [];
+	this.delay = [];
+
+	this.init = function(){
+		var str_hist = $('#hist').val();
+		var arr_hist = str_hist.split(',');
+		var i, re, m, op, trans, vari;
+		for(i in arr_hist){
+			re = new RegExp("^([rwc]+)([0-9]*)\(.?([a-z]?)\).?");
+			m = re.exec(arr_hist[i]);
+			op = m[1];
+			trans = m[2];
+			vari = m[4];
+			if(vari != "" && this.data[vari] == undefined){
+				this.data[vari] = new Data(vari);
+			}
+			this.operations[i] = new Operation(op, trans, this.data[vari]);
+		}
+	};
+	this.getNextOperation = function(){
+		return this.operations.shift();
+	};
+	this.next = function(){
+		if(this.hasDelay()){
+			if(this.operations.length > 0){
+				//todas operacoes apos um delay vao tambem para o delay ou apenas da mesma transacao??
+				var op1 = this.getNextOperation();
+				if(op1.type != 'c'){
+					this.addDelay(op1);
+				}else{
+					op1.make();
+				}
+			}else{
+				var opd = this.getNextDelay();
+				opd.make();
+			}
+		}else{
+			var op1 = this.getNextOperation();
+			if(this.operations.length == 0 && end_hist.val() == ""){
+				this.init();
+				op1 = this.getNextOperation();
+			}
+			// lock
+			if(op1 != undefined){
+				op1.make();
+			}
+		}
+	};
+	this.hasDelay = function(){
+		return this.delay.length > 0;
+	};
+	this.addDelay = function(op){
+		this.delay.push(op);
+		this.writeDelay();
+	};
+	this.getNextDelay = function(){
+		var de = this.delay.shift();
+		this.writeDelay();
+		return de;
+	};
+	this.finishAll = function(){
+		this.init();
+		while(this.operations.length > 0 || this.delay.length > 1){ // corrigir delay > 0
+			this.next();
+		}
+	};
+	this.commit = function(trans){
+		var i;
+		for(i in this.data){
+			this.data[i].removeLocks(trans);
+		}
+		this.writeEndHist('c' + trans);
+	};
+	this.writeEndHist = function(str){
+		end_hist.val(end_hist.val() + str + " ");
+	};
+	this.writeDelay = function(){
+		var i, str = "";
+		for(i in this.delay){
+			str += this.delay[i].type + this.delay[i].transaction + '(' + this.delay[i].data.value + ') ';
+		}
+		field_delay.val(str);
+	};
+}
+
+function Operation(type, trans, data){
+	this.type = type;
+	this.transaction = trans;
+	this.data = data;
+
+	this.make = function(){
+		if(this.type == "r"){
+			if(this.data.hasLockX()){
+				if(this.data.getLockX() != this.transaction){
+					hist.addDelay(this);
+				}else{
+					this.finish();
+				}
+			}else{
+				if(this.data.hasLockC(this.transaction)){
+					this.finish();
+				}else{
+					this.makeLock("c");
+					this.finish();
+				}
+			}
+		}else if(this.type == "w"){
+			if(this.data.hasLockX()){
+				if(this.data.getLockX() != this.transaction){
+					hist.addDelay(this);
+				}else{
+					this.finish();
+				}
+			}else{
+				if(this.data.hasAnyExceptLockC(this.transaction)){
+					hist.addDelay(this);
+				}else if(this.data.hasLockC(this.transaction)){
+					this.makeLock("x");
+					this.finish();
+				}
+			}
+		}else if(this.type == "c"){
+			hist.commit(this.transaction);
+		}
+	};
+	this.makeLock = function(lock_type){
+		if(lock_type == "c"){
+			this.data.makeLockC(this.transaction);
+			hist.writeEndHist('lc' + this.transaction + '(' + this.data.value + ')');
+		}else if(lock_type == "x"){
+			this.data.makeLockX(this.transaction);
+			hist.writeEndHist('lx' + this.transaction + '(' + this.data.value + ')');
+		}
+	};
+	this.finish = function(){
+		hist.writeEndHist(this.type + this.transaction + '(' + this.data.value + ')');
+	};
+}
+
+function Data(value){
+	this.value = value;
+	this.lockc = []; // lock compartilhado com array de transacoes
+	this.lockx = 0; // lock exclusivo com valor igual transacao
+
+	this.makeLockC = function(trans){
+		this.lockc[trans] = true;
+	};
+	this.makeLockX = function(trans){
+		if(this.lockc[trans] != undefined){
+			delete this.lockc[trans];
+		}
+		this.lockx = trans;
+	};
+	this.getLockC = function(){
+		return this.lockc;
+	};
+	this.getLockX = function(){
+		return this.lockx;
+	};
+	this.hasLockC = function(trans){
+		return this.lockc[trans] != undefined && this.lockc[trans] != false;
+	};
+	this.hasAnyLockC = function(){
+		if(this.getLockC().length > 0){
+			return true;
+		}
+		return false;
+	};
+	this.hasAnyExceptLockC = function(trans){
+		var i, has = false;
+		for(i in this.lockc){
+			if(this.lockc[i] == true && i != trans){
+				return true;
+			}
+		}
+		return false;
+	};
+	this.hasLockX = function(){
+		return this.lockx > 0;
+	};
+	this.hasLock = function(){
+		if(this.hasAnyLockC() || this.hasLockX()){
+			return true;
+		}
+		return false;
+	};
+	this.removeLocks = function(trans){
+		
+	};
+}
+</script>
+</head> 
+<body>
+	<div>
+		<div>História: <input type="text" id="hist" value="r1(x),r2(x),w2(x),r2(x),c1,c2,r11(y)" size="80" /></div>
+		<div>
+			<input type="button" value="Próximo" id="bnext" />
+			<input type="button" value="Finalizar" id="bfinish" />
+		</div>
+		<div>Delay: <input type="text" id="delay" /></div>
+		<div>História final: <input type="text" id="end_hist" size="80" /></div>
+	</div>
+</body> 
+</html>
