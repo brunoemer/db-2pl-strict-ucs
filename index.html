@@ -8,16 +8,22 @@
 <script src="jquery-ui-1.10.4.custom/js/jquery-ui-1.10.4.custom.js"></script>
 
 <style type="text/css">
-
+	#delays .delay{
+		width: 500px;
+	}
+	.historia{
+		width: 500px;
+	}
 </style>
 <script type="text/javascript">
 var hist;
 var end_hist;
-var field_delay;
+var div_delays;
 $(document).ready(function() {
 	hist = new History();
 	end_hist = $('#end_hist');
-	field_delay = $('#delay');
+	end_hist.prop('readonly', true);
+	div_delays = $('#delays');
 	
 	$('#bnext').click(function(){
 		hist.next();
@@ -25,14 +31,21 @@ $(document).ready(function() {
 	$('#bfinish').click(function(){
 		hist.finishAll();
 	});
-	$('#delay').prop('readonly', true);
-	$('#end_hist').prop('readonly', true);
+	$('#bclear').click(function(){
+		end_hist.val('');
+		div_delays.html('');
+		hist.started = false;
+		hist.delays = [];
+		hist.operations = [];
+		hist.data = [];
+	});
 });
 
 function History(){
 	this.operations = [];
 	this.data = [];
-	this.delay = [];
+	this.delays = [];
+	this.started = false;
 
 	this.init = function(){
 		var str_hist = $('#hist').val();
@@ -47,52 +60,79 @@ function History(){
 			if(vari != "" && this.data[vari] == undefined){
 				this.data[vari] = new Data(vari);
 			}
+			if(trans != "" && this.delays[trans] == undefined){
+				this.delays[trans] = [];
+			}
 			this.operations[i] = new Operation(op, trans, this.data[vari]);
 		}
+		this.makeHtmlDelay();
+		this.started = true;
 	};
 	this.getNextOperation = function(){
 		return this.operations.shift();
 	};
 	this.next = function(){
-		if(this.hasDelay()){
-			if(this.operations.length > 0){
-				//todas operacoes apos um delay vao tambem para o delay ou apenas da mesma transacao??
-				var op1 = this.getNextOperation();
-				if(op1.type != 'c'){
-					this.addDelay(op1);
-				}else{
-					op1.make();
-				}
-			}else{
-				var opd = this.getNextDelay();
-				opd.make();
-			}
-		}else{
+		if(this.started == false){
+			this.init();
+		}
+		var test = this.testDelays();
+		if(test == false){
 			var op1 = this.getNextOperation();
-			if(this.operations.length == 0 && end_hist.val() == ""){
-				this.init();
-				op1 = this.getNextOperation();
-			}
-			// lock
 			if(op1 != undefined){
-				op1.make();
+				op1.make(false);
 			}
 		}
 	};
-	this.hasDelay = function(){
-		return this.delay.length > 0;
+	this.addDelay = function(op, revert){
+		if(revert == false){
+			this.delays[op.transaction].push(op);
+		}else{
+			this.delays[op.transaction].unshift(op);
+		}
+		this.writeDelays();
 	};
-	this.addDelay = function(op){
-		this.delay.push(op);
-		this.writeDelay();
+	this.testDelays = function(){
+		var i, dop, hadDelay, test = false;
+		for(i in this.delays){
+			if(this.delays[i].length > 0){
+				dop = this.delays[i].shift();
+				hadDelay = dop.make(true);
+				if(hadDelay == false){
+					test = true;
+				}
+			}
+		}
+		if(test){
+			this.writeDelays();
+		}
+		return test;
 	};
-	this.getNextDelay = function(){
-		var de = this.delay.shift();
-		this.writeDelay();
-		return de;
+	this.hasDelay = function(trans){
+		return this.delays[trans].length > 0;
+	};
+	this.writeDelays = function(){
+		var i, j, str;
+		for(i in this.delays){
+			str = '';
+			for(j in this.delays[i]){
+				str += this.delays[i][j].type + this.delays[i][j].transaction + '(' + this.delays[i][j].data.value + ') ';
+			}
+			$('#delays #'+i).val(str);
+		}
+	};
+	this.makeHtmlDelay = function(){
+		var i;
+		for(i in this.delays){
+			$(div_delays).append('Transação '+i+' ');
+			$('<input>').attr({type:'text', id:i, name:'delay'+i, class:'delay'}).appendTo(div_delays);
+			$(div_delays).append('<br>');
+		}
+		$('#delays input').prop('readonly', true);
 	};
 	this.finishAll = function(){
-		this.init();
+		if(this.started == false){
+			this.init();
+		}
 		while(this.operations.length > 0 || this.delay.length > 1){ // corrigir delay > 0
 			this.next();
 		}
@@ -107,13 +147,6 @@ function History(){
 	this.writeEndHist = function(str){
 		end_hist.val(end_hist.val() + str + " ");
 	};
-	this.writeDelay = function(){
-		var i, str = "";
-		for(i in this.delay){
-			str += this.delay[i].type + this.delay[i].transaction + '(' + this.delay[i].data.value + ') ';
-		}
-		field_delay.val(str);
-	};
 }
 
 function Operation(type, trans, data){
@@ -121,40 +154,55 @@ function Operation(type, trans, data){
 	this.transaction = trans;
 	this.data = data;
 
-	this.make = function(){
+	this.make = function(revert){
+		var hadDelay = false;
 		if(this.type == "r"){
-			if(this.data.hasLockX()){
-				if(this.data.getLockX() != this.transaction){
-					hist.addDelay(this);
-				}else{
-					this.finish();
-				}
+			if(revert == false && hist.hasDelay(this.transaction)){
+				hist.addDelay(this, revert);
+				hadDelay = true;
 			}else{
-				if(this.data.hasLockC(this.transaction)){
-					this.finish();
+				if(this.data.hasLockX()){
+					if(this.data.getLockX() != this.transaction){
+						hist.addDelay(this, revert);
+						hadDelay = true;
+					}else{
+						this.write();
+					}
 				}else{
-					this.makeLock("c");
-					this.finish();
+					if(this.data.hasLockC(this.transaction)){
+						this.write();
+					}else{
+						this.makeLock("c");
+						this.write();
+					}
 				}
 			}
 		}else if(this.type == "w"){
-			if(this.data.hasLockX()){
-				if(this.data.getLockX() != this.transaction){
-					hist.addDelay(this);
-				}else{
-					this.finish();
-				}
+			if(revert == false && hist.hasDelay(this.transaction)){
+				hist.addDelay(this, revert);
+				hadDelay = true;
 			}else{
-				if(this.data.hasAnyExceptLockC(this.transaction)){
-					hist.addDelay(this);
-				}else if(this.data.hasLockC(this.transaction)){
-					this.makeLock("x");
-					this.finish();
+				if(this.data.hasLockX()){
+					if(this.data.getLockX() != this.transaction){
+						hist.addDelay(this, revert);
+						hadDelay = true;
+					}else{
+						this.write();
+					}
+				}else{
+					if(this.data.hasAnyExceptLockC(this.transaction)){
+						hist.addDelay(this, revert);
+						hadDelay = true;
+					}else{
+						this.makeLock("x");
+						this.write();
+					}
 				}
 			}
 		}else if(this.type == "c"){
 			hist.commit(this.transaction);
 		}
+		return hadDelay;
 	};
 	this.makeLock = function(lock_type){
 		if(lock_type == "c"){
@@ -165,7 +213,7 @@ function Operation(type, trans, data){
 			hist.writeEndHist('lx' + this.transaction + '(' + this.data.value + ')');
 		}
 	};
-	this.finish = function(){
+	this.write = function(){
 		hist.writeEndHist(this.type + this.transaction + '(' + this.data.value + ')');
 	};
 }
@@ -218,20 +266,22 @@ function Data(value){
 		return false;
 	};
 	this.removeLocks = function(trans){
-		
+		delete this.lockc[trans];
+		if(this.lockx == trans){
+			this.lockx = 0;
+		}
 	};
 }
 </script>
 </head> 
 <body>
+	<div>História: <input type="text" id="hist" value="r1(x),r2(x),w2(x),r2(x),c1,r1(y),c2,r3(y)" class="historia" /></div>
 	<div>
-		<div>História: <input type="text" id="hist" value="r1(x),r2(x),w2(x),r2(x),c1,c2,r11(y)" size="80" /></div>
-		<div>
-			<input type="button" value="Próximo" id="bnext" />
-			<input type="button" value="Finalizar" id="bfinish" />
-		</div>
-		<div>Delay: <input type="text" id="delay" /></div>
-		<div>História final: <input type="text" id="end_hist" size="80" /></div>
+		<input type="button" value="Próximo" id="bnext" />
+		<input type="button" value="Finalizar" id="bfinish" />
+		<input type="button" value="Limpar" id="bclear" />
 	</div>
+	<div id="delays"></div>
+	<div>História final: <input type="text" id="end_hist" class="historia" /></div>
 </body> 
 </html>
