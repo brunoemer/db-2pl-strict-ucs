@@ -14,6 +14,9 @@
 	.historia{
 		width: 500px;
 	}
+	div{
+		margin-top: 30px;
+	}
 </style>
 <script type="text/javascript">
 var hist;
@@ -46,6 +49,7 @@ function History(){
 	this.data = [];
 	this.delays = [];
 	this.started = false;
+	this.deadlocks = [];
 
 	this.init = function(){
 		var str_hist = $('#hist').val();
@@ -65,6 +69,9 @@ function History(){
 			}
 			this.operations[i] = new Operation(op, trans, this.data[vari]);
 		}
+		for(i in this.delays){
+			this.deadlocks[i] = 0;
+		}
 		this.makeHtmlDelay();
 		this.started = true;
 	};
@@ -80,6 +87,17 @@ function History(){
 			var op1 = this.getNextOperation();
 			if(op1 != undefined){
 				op1.make(false);
+			}
+		}
+		if(this.operations.length == 0){
+			var i, ctrans = 0;
+			for(i in this.deadlocks){
+				if(this.deadlocks[i] > 1 && this.delays[i].length > 0){
+					ctrans++;
+				}
+			}
+			if(ctrans > 1){
+				alert("Deadlock");
 			}
 		}
 	};
@@ -99,11 +117,16 @@ function History(){
 				hadDelay = dop.make(true);
 				if(hadDelay == false){
 					test = true;
+				}else{
+					this.deadlocks[i] = parseInt(this.deadlocks[i]) + 1;
 				}
 			}
 		}
 		if(test){
 			this.writeDelays();
+			for(i in this.deadlocks){
+				this.deadlocks[i] = 0;
+			}
 		}
 		return test;
 	};
@@ -115,7 +138,11 @@ function History(){
 		for(i in this.delays){
 			str = '';
 			for(j in this.delays[i]){
-				str += this.delays[i][j].type + this.delays[i][j].transaction + '(' + this.delays[i][j].data.value + ') ';
+				if(this.delays[i][j].type != 'c'){
+					str += this.delays[i][j].type + this.delays[i][j].transaction + '(' + this.delays[i][j].data.value + ') ';
+				}else{
+					str += this.delays[i][j].type + this.delays[i][j].transaction;
+				}
 			}
 			$('#delays #'+i).val(str);
 		}
@@ -200,7 +227,12 @@ function Operation(type, trans, data){
 				}
 			}
 		}else if(this.type == "c"){
-			hist.commit(this.transaction);
+			if(revert == false && hist.hasDelay(this.transaction)){
+				hist.addDelay(this, revert);
+				hadDelay = true;
+			}else{
+				hist.commit(this.transaction);
+			}
 		}
 		return hadDelay;
 	};
@@ -275,7 +307,7 @@ function Data(value){
 </script>
 </head> 
 <body>
-	<div>História: <input type="text" id="hist" value="r1(x),r2(x),w2(x),r2(x),c1,r1(y),c2,r3(y)" class="historia" /></div>
+	<div>História: <input type="text" id="hist" value="" class="historia" /></div>
 	<div>
 		<input type="button" value="Próximo" id="bnext" />
 		<input type="button" value="Finalizar" id="bfinish" />
@@ -283,5 +315,11 @@ function Data(value){
 	</div>
 	<div id="delays"></div>
 	<div>História final: <input type="text" id="end_hist" class="historia" /></div>
+	<div>
+		<br>Ex:<br>
+		r1(x),r2(x),w2(x),r2(x),c1,r1(y),c2,r3(y),c3<br>
+		w1(x),r1(x),w1(y),r2(y),r2(z),c1,c2<br>
+		w1(x),w2(y),r2(x),r1(y),c1,c2 - deadlock<br>
+	</div>
 </body> 
 </html>
